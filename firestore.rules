@@ -1,0 +1,64 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(uid) {
+      return isAuthenticated() && request.auth.uid == uid;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    // ── users collection ──────────────────────────────────────────────────────
+    match /users/{uid} {
+      // User can only read their own document
+      allow read: if isOwner(uid);
+
+      // On registration, role must be 'customer'
+      allow create: if isOwner(uid)
+                    && request.resource.data.uid == request.auth.uid
+                    && request.resource.data.role == 'customer';
+
+      // User can update profile fields, but cannot change role
+      allow update: if isOwner(uid)
+                    && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role']);
+    }
+
+    // ── products collection ───────────────────────────────────────────────────
+    match /products/{productId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // ── carts collection ──────────────────────────────────────────────────────
+    match /carts/{uid} {
+      // Only the authenticated owner can read or modify their cart
+      allow read, write: if isOwner(uid);
+    }
+
+    // ── orders collection ─────────────────────────────────────────────────────
+    match /orders/{orderId} {
+      // Users can read their own orders; Admins can read all orders
+      allow read: if isAuthenticated() && (resource.data.userId == request.auth.uid || isAdmin());
+
+      // Users can create orders under their own userId
+      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
+
+      // Only admins can update order status
+      allow update: if isAdmin();
+    }
+
+    // ── deny everything else ──────────────────────────────────────────────────
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
